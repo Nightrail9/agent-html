@@ -25,53 +25,73 @@ function flow(def){
     if(n.type==="decision"){ n.w = Math.max(120, wtext+58); n.h = Math.max(64, n.lines.length*22+34); }
     else { n.w = Math.max(96, wtext+34); n.h = Math.max(46, n.lines.length*22+24); }
   });
-  // 2) 出边邻接 + 深度（最长路径，主轴为列/行）
-  const indeg = {}; nodes.forEach(n=>indeg[n.id]=0);
-  edges.forEach(e=>{ if(byId[e[0]]&&byId[e[1]]) indeg[e[1]]++; });
-  const outEdges = {}; nodes.forEach(n=>outEdges[n.id]=[]);
-  edges.forEach(e=>{ if(byId[e[0]]&&byId[e[1]]) outEdges[e[0]].push(e); });
-  const depth = {}; nodes.forEach(n=>depth[n.id]=0);
-  // 最长路径分层（拓扑序）
-  const seen=new Set(); let q=nodes.filter(n=>indeg[n.id]===0).map(n=>n.id); q.forEach(id=>seen.add(id));
-  while(q.length){ const nq=[]; q.forEach(id=>outEdges[id].forEach(e=>{
-    if(depth[e[1]] < depth[id]+1){ depth[e[1]] = depth[id]+1; }
-    if(!seen.has(e[1])){ seen.add(e[1]); nq.push(e[1]); }
-  })); q=nq; }
-  nodes.forEach(n=>{ if(!seen.has(n.id)) depth[n.id]=0; });
-  const maxD = Math.max(...nodes.map(n=>depth[n.id]),0);
-  const cols = []; for(let l=0;l<=maxD;l++) cols.push(nodes.filter(n=>depth[n.id]===l));
-  const horiz = dir==="LR", PAD=28, GX=70, GY=34;
-  // 3) 递归定位：主轴位置按层，副轴按"子树块"堆叠，父节点对子女居中
-  const mainPos = []; let acc=PAD;
-  cols.forEach(col=>{ const w=Math.max(...col.map(n=>horiz?n.w:n.h)); mainPos.push({start:acc,size:w}); acc+=w+GX; });
-  const placed = {};
-  let cursor = PAD;
-  const crossOf = n=>horiz? n.h : n.w;
-  function place(n){
-    if(placed[n.id]) return placed[n.id];
-    const kids = outEdges[n.id].map(e=>byId[e[1]]).filter(k=>depth[k.id]===depth[n.id]+1);
-    let center;
-    if(kids.length===0){
-      center = cursor + crossOf(n)/2; cursor += crossOf(n) + GY;
-    } else {
-      const first = place(kids[0]);
-      let last = first;
-      for(let i=1;i<kids.length;i++) last = place(kids[i]);
-      center = (first+last)/2;
-    }
-    placed[n.id] = center;
-    return center;
-  }
-  // 依深度从浅到深、按邻接顺序放置（处理多根/孤点）
-  const roots = nodes.filter(n=>indeg[n.id]===0);
-  roots.forEach(place);
-  nodes.forEach(n=>{ if(!placed[n.id]) place(n); });
-  nodes.forEach(n=>{
-    const layer = mainPos[depth[n.id]];
-    if(horiz){ n.x = layer.start + (layer.size-n.w)/2; n.y = placed[n.id]-n.h/2; }
-    else { n.x = placed[n.id]-n.w/2; n.y = layer.start + (layer.size-n.h)/2; }
+  // 2) 发现式分层：节点只分配一次，反馈边不再把节点移回另一层。
+  const indeg = {}, outEdges = {};
+  nodes.forEach(n=>{ indeg[n.id]=0; outEdges[n.id]=[]; });
+  edges.forEach(e=>{
+    if(byId[e[0]]&&byId[e[1]]){ indeg[e[1]]++; outEdges[e[0]].push(e[1]); }
   });
-  const W = Math.max(...nodes.map(n=>n.x+n.w))+PAD;
+  const depth = {}, queue = [];
+  const discover = (id, level)=>{
+    if(depth[id] !== undefined) return;
+    depth[id] = level; queue.push(id);
+  };
+  nodes.forEach(n=>{ if(indeg[n.id]===0) discover(n.id,0); });
+  let cursor = 0;
+  while(true){
+    while(cursor<queue.length){
+      const id = queue[cursor++];
+      outEdges[id].forEach(next=>discover(next,depth[id]+1));
+    }
+    const disconnected = nodes.find(n=>depth[n.id]===undefined);
+    if(!disconnected) break;
+    discover(disconnected.id,0);
+  }
+  const layers = [];
+  nodes.forEach(n=>{
+    const level = depth[n.id];
+    if(!layers[level]) layers[level] = [];
+    layers[level].push(n);
+  });
+  const horiz = dir==="LR", PAD=28, GX=70, GY=34;
+  const mainOf = n=>horiz?n.w:n.h;
+  const crossOf = n=>horiz?n.h:n.w;
+  const mainPos = [];
+  let mainOffset = PAD, maxCross = 0;
+  layers.forEach(layer=>{
+    let mainSize = 0, crossSize = GY*(layer.length-1);
+    layer.forEach(n=>{
+      mainSize = Math.max(mainSize,mainOf(n));
+      crossSize += crossOf(n);
+    });
+    mainPos.push({start:mainOffset,size:mainSize});
+    mainOffset += mainSize+GX;
+    maxCross = Math.max(maxCross,crossSize);
+  });
+  layers.forEach((layer,level)=>{
+    const crossSize = layer.reduce((sum,n)=>sum+crossOf(n),0)+GY*(layer.length-1);
+    let crossOffset = PAD+(maxCross-crossSize)/2;
+    layer.forEach(n=>{
+      if(horiz){
+        n.x = mainPos[level].start+(mainPos[level].size-n.w)/2;
+        n.y = crossOffset;
+      }else{
+        n.x = crossOffset;
+        n.y = mainPos[level].start+(mainPos[level].size-n.h)/2;
+      }
+      crossOffset += crossOf(n)+GY;
+    });
+  });
+  const graphRight = Math.max(...nodes.map(n=>n.x+n.w));
+  const backEdges = edges.filter(e=>{
+    const a=byId[e[0]], b=byId[e[1]];
+    return a&&b&&(horiz?b.x+b.w/2<a.x+a.w/2:b.y+b.h/2<a.y+a.h/2);
+  });
+  const backLabelWidth = Math.max(0,...backEdges.map(e=>e[2]?meas(e[2])+14:0));
+  const feedbackWidth = !horiz&&backEdges.length
+    ? (backEdges.length-1)*20+backLabelWidth/2+PAD/2
+    : 0;
+  const W = graphRight+PAD+feedbackWidth;
   const H = Math.max(...nodes.map(n=>n.y+n.h))+PAD;
   const cx = n=>n.x+n.w/2, cy = n=>n.y+n.h/2;
   // 出边锚点：决策节点按目标方位选菱形顶点/边，其余用右侧或下侧
@@ -85,21 +105,36 @@ function flow(def){
   }
   function inAnchor(b,a){ return horiz? {x:b.x, y:cy(b)} : {x:cx(b), y:b.y}; }
   // 4) 边
-  let edgeSvg = "";
+  let edgeSvg = "", feedbackIndex = 0;
   edges.forEach(e=>{
     const a=byId[e[0]], b=byId[e[1]]; if(!a||!b) return;
-    const p1=anchor(a,b), p2=inAnchor(b,a);
-    const x1=p1.x,y1=p1.y,x2=p2.x,y2=p2.y;
-    const back = horiz? (x2<x1) : (y2<y1);
-    let d;
-    if(back){ const mx=(x1+x2)/2, my=(y1+y2)/2 + (horiz?0:-30) - (horiz?30:0); d=`M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`; }
-    else if(horiz){ const mx=(x1+x2)/2; d=`M ${x1} ${y1} C ${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`; }
-    else { const my=(y1+y2)/2; d=`M ${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`; }
+    const back = horiz? cx(b)<cx(a) : cy(b)<cy(a);
+    let d, labelX, labelY;
+    if(back){
+      const laneIndex = feedbackIndex++;
+      let x1,y1,x2,y2;
+      if(horiz){
+        x1=cx(a); y1=a.y; x2=cx(b); y2=b.y;
+        const laneY=PAD/2+laneIndex*20;
+        d=`M ${x1} ${y1} V ${laneY} H ${x2} V ${y2}`;
+        labelX=(x1+x2)/2; labelY=laneY;
+      }else{
+        x1=a.x+a.w; y1=cy(a); x2=b.x+b.w; y2=cy(b);
+        const laneX=graphRight+PAD/2+laneIndex*20;
+        d=`M ${x1} ${y1} H ${laneX} V ${y2} H ${x2}`;
+        labelX=laneX; labelY=(y1+y2)/2;
+      }
+    }else{
+      const p1=anchor(a,b), p2=inAnchor(b,a);
+      const x1=p1.x,y1=p1.y,x2=p2.x,y2=p2.y;
+      if(horiz){ const mx=(x1+x2)/2; d=`M ${x1} ${y1} C ${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`; }
+      else { const my=(y1+y2)/2; d=`M ${x1} ${y1} C ${x1} ${my} ${x2} ${my} ${x2} ${y2}`; }
+      labelX=(x1+x2)/2; labelY=(y1+y2)/2-6;
+    }
     edgeSvg += `<path d="${d}" fill="none" stroke="var(--text2)" stroke-width="1.6" marker-end="url(#fw-ar)" opacity="0.85"/>`;
     if(e[2]){
-      const lx=(x1+x2)/2, ly=(y1+y2)/2 - 6;
       const lw = meas(e[2])+14;
-      edgeSvg += `<rect x="${lx-lw/2}" y="${ly-11}" width="${lw}" height="20" rx="10" fill="var(--panel)" stroke="var(--border)"/><text x="${lx}" y="${ly+4}" text-anchor="middle" font-size="12" fill="var(--text2)">${escH(e[2])}</text>`;
+      edgeSvg += `<rect x="${labelX-lw/2}" y="${labelY-11}" width="${lw}" height="20" rx="10" fill="var(--panel)" stroke="var(--border)"/><text x="${labelX}" y="${labelY+4}" text-anchor="middle" font-size="12" fill="var(--text2)">${escH(e[2])}</text>`;
     }
   });
   // 5) 节点
