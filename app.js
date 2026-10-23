@@ -88,8 +88,11 @@ function flow(def){
     return a&&b&&(horiz?b.x+b.w/2<a.x+a.w/2:b.y+b.h/2<a.y+a.h/2);
   });
   const backLabelWidth = Math.max(0,...backEdges.map(e=>e[2]?meas(e[2])+14:0));
+  const feedbackLaneGap = horiz?28:Math.max(20,backLabelWidth+8);
+  const feedbackTop = horiz?Math.max(0,backEdges.length-1)*feedbackLaneGap:0;
+  if(feedbackTop) nodes.forEach(n=>{ n.y += feedbackTop; });
   const feedbackWidth = !horiz&&backEdges.length
-    ? (backEdges.length-1)*20+backLabelWidth/2+PAD/2
+    ? (backEdges.length-1)*feedbackLaneGap+backLabelWidth/2+PAD/2
     : 0;
   const W = graphRight+PAD+feedbackWidth;
   const H = Math.max(...nodes.map(n=>n.y+n.h))+PAD;
@@ -115,12 +118,12 @@ function flow(def){
       let x1,y1,x2,y2;
       if(horiz){
         x1=cx(a); y1=a.y; x2=cx(b); y2=b.y;
-        const laneY=PAD/2+laneIndex*20;
+        const laneY=PAD/2+laneIndex*feedbackLaneGap;
         d=`M ${x1} ${y1} V ${laneY} H ${x2} V ${y2}`;
         labelX=(x1+x2)/2; labelY=laneY;
       }else{
         x1=a.x+a.w; y1=cy(a); x2=b.x+b.w; y2=cy(b);
-        const laneX=graphRight+PAD/2+laneIndex*20;
+        const laneX=graphRight+PAD/2+laneIndex*feedbackLaneGap;
         d=`M ${x1} ${y1} H ${laneX} V ${y2} H ${x2}`;
         labelX=laneX; labelY=(y1+y2)/2;
       }
